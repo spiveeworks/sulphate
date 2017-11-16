@@ -1,14 +1,14 @@
 use std::cmp;
-use std::collections::binary_heap;
+use std::collections;
+use std::ops;
 
-use units;
 use entity_heap;
 
-pub trait Event {
+pub trait Event<T> where T: Ord {
     fn invoke(
         self: Self,
         space: &mut entity_heap::EntityHeap,
-        time: &mut EventQueue,
+        time: &mut EventQueue<T>,
     );
 }
 
@@ -16,58 +16,59 @@ pub trait Event {
 //   since by-value makes more sense to write,
 //   and potentially allows implementors to use their own code
 //   outside of event contexts
-trait PolyEvent: Event {
+trait PolyEvent<T>: Event<T> where T: Ord {
     fn invoke_box(
         self: Box<Self>,
         space: &mut entity_heap::EntityHeap,
-        time: &mut EventQueue,
+        time: &mut EventQueue<T>,
     );
 }
 
 // note the resemlence to FnBox
-impl<T> PolyEvent for T
-    where T: Event
+impl<E, T> PolyEvent<T> for E
+    where E: Event<T>,
+          T: Ord,
 {
     fn invoke_box(
         self: Box<Self>,
         space: &mut entity_heap::EntityHeap,
-        time: &mut EventQueue,
+        time: &mut EventQueue<T>,
     ) {
         self.invoke(space, time);
     }
 }
 
 
-struct QueueElement {
-    execute_time: units::Time,
-    call_back: Box<PolyEvent>,
+struct QueueElement<T> where T: Ord {
+    execute_time: T,
+    call_back: Box<PolyEvent<T>>,
 }
 
-impl PartialEq for QueueElement {
+impl<T> PartialEq for QueueElement<T> where T: Ord {
     fn eq(
-        self: &QueueElement,
-        other: &QueueElement
+        self: &Self,
+        other: &Self,
     ) -> bool {
         self.execute_time == other.execute_time
     }
 }
 
-impl Eq for QueueElement {
+impl<T> Eq for QueueElement<T> where T: Ord {
 }
 
-impl PartialOrd for QueueElement {
+impl<T> PartialOrd for QueueElement<T> where T: Ord {
     fn partial_cmp(
-        self: &QueueElement,
-        other: &QueueElement
+        self: &Self,
+        other: &Self
     ) -> Option<cmp::Ordering> {
         Some(Ord::cmp(self, other))
     }
 }
 
-impl Ord for QueueElement {
+impl<T> Ord for QueueElement<T> where T: Ord {
     fn cmp(
-        self: &QueueElement,
-        other: &QueueElement
+        self: &Self,
+        other: &Self
     ) -> cmp::Ordering {
         use std::cmp::Ordering::*;
         match Ord::cmp(&self.execute_time, &other.execute_time) {
@@ -78,66 +79,73 @@ impl Ord for QueueElement {
     }
 }
 
-pub struct EventQueue {
-    current_time: units::Time,
-    queue: binary_heap::BinaryHeap<QueueElement>,
+pub struct EventQueue<T> where T: Ord {
+    current_time: T,
+    queue: collections::BinaryHeap<QueueElement<T>>,
 }
 
-impl EventQueue {
-    pub fn new() -> EventQueue {
+impl<T> EventQueue<T> where T: Ord {
+    pub fn new(initial_time: T) -> Self {
         EventQueue {
-            current_time: 0,
-            queue: binary_heap::BinaryHeap::new(),
+            current_time: initial_time,
+            queue: collections::BinaryHeap::new(),
         }
     }
 
-    pub fn now(&self) -> units::Time {
-        self.current_time
+    pub fn now(self: &Self) -> &T {
+        &self.current_time
     }
 
-    pub fn next(&self) -> Option<units::Time> {
+    pub fn next(&self) -> Option<&T> {
         self.queue
             .peek()
-            .map(|qe| qe.execute_time)
+            .map(|qe| &qe.execute_time)
     }
 
-    pub fn invoke_next(&mut self, space: &mut entity_heap::EntityHeap) {
-        let element =
-            if let Some(next) = self.queue.peek_mut() {
-                if next.execute_time > self.current_time {
-                    self.current_time = next.execute_time;
-                }
-                binary_heap::PeekMut::pop(next)
-            } else {
-                return;
-            };
-        element.call_back
-               .invoke_box(space, self);
+    pub fn invoke_next(self: &mut Self, space: &mut entity_heap::EntityHeap) {
+        if let Some(element) = self.queue.pop() {
+            let QueueElement { execute_time, call_back } = element;
+            if self.current_time < execute_time {
+                self.current_time = execute_time;
+            }
+            call_back.invoke_box(space, self);
+        }
     }
+
+    fn has_event_by(self: &mut Self, time: &T) -> bool {
+        if let Some(next_time) = self.next() {
+            next_time <= time
+        } else {
+            false
+        }
+    }
+
 
     pub fn simulate(
-        &mut self,
+        self: &mut Self,
         space: &mut entity_heap::EntityHeap,
-        until: units::Time
+        until: T,
     ) {
-        while let Some(next_time) = self.next() {
-            if next_time <= until {
-                self.invoke_next(space);
-            } else {
-                break;
-            }
+        while self.has_event_by(&until) {
+            self.invoke_next(space);
         }
         self.current_time = until;
     }
 
-    pub fn enqueue<E>(&mut self, event: E, delay: units::Duration)
-        where E: 'static + Event
+    pub fn enqueue_absolute<E>(self: &mut Self, event: E, execute_time: T)
+        where E: 'static + Event<T>
     {
-        let element = QueueElement {
-            execute_time: self.current_time + delay,
-            call_back: Box::new(event),
-        };
+        let call_back = Box::new(event);
+        let element = QueueElement { call_back, execute_time };
         self.queue.push(element);
+    }
+
+    pub fn enqueue_relative<E, D>(self: &mut Self, event: E, execute_delay: D)
+        where E: 'static + Event<T>,
+              T: ops::Add<D, Output=T> + Clone,
+    {
+        let execute_time = self.current_time.clone() + execute_delay;
+        self.enqueue_absolute(event, execute_time);
     }
 }
 
