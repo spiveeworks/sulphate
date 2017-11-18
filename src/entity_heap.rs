@@ -2,13 +2,16 @@ use std::any;
 use std::any::Any;
 use std::collections;
 
+use rand;
+
 pub type UID = u64;
 
 type Key = (any::TypeId, UID);
 
 // heap in the memory sense not the queue sense
 pub struct EntityHeap {
-    content: collections::HashMap<Key, Box<Any>>
+    content: collections::HashMap<Key, Box<Any>>,
+    key_seed: rand::XorShiftRng,
 }
 
 static DOWNCAST_ERROR: &'static str = "\
@@ -34,7 +37,8 @@ fn unwrap_box_mut<T: Any>(box_mut: &mut Box<Any>) -> &mut T {
 impl EntityHeap {
     pub fn new() -> EntityHeap {
         let content = collections::HashMap::new();
-        EntityHeap { content }
+        let key_seed = rand::weak_rng();
+        EntityHeap { content, key_seed }
     }
 
     pub fn get<T: Any>(self: &Self, k: UID) -> Option<&T> {
@@ -51,12 +55,26 @@ impl EntityHeap {
             .map(unwrap_box_mut)
     }
 
-    pub fn insert<T: Any>(self: &mut Self, k: UID, v: T) -> Option<T> {
+    fn new_uid(self: &mut Self, ty: any::TypeId) -> UID {
+        use rand::Rng;
+        loop {
+            let id = self.key_seed.next_u64();
+            if !self.content.contains_key(&(ty, id)) {
+                return id;
+            }
+        }
+    }
+
+    pub fn add<T: Any>(self: &mut Self, v: T) -> UID {
         let ty = any::TypeId::of::<T>();
         let val = Box::new(v);
-        self.content
-            .insert((ty, k), val)
-            .map(unwrap_box)
+        let id = self.new_uid(ty);
+        let overflow = self.content
+                           .insert((ty, id), val);
+        // this is fine, it will just drop the value,
+        // but when debugging I'd want to know what happened
+        debug_assert!(overflow.is_none(), "reused key");
+        id
     }
 
     pub fn remove<T: Any>(self: &mut Self, k: UID) -> Option<T> {

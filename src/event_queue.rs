@@ -53,8 +53,7 @@ impl<T> PartialEq for QueueElement<T> where T: Ord {
     }
 }
 
-impl<T> Eq for QueueElement<T> where T: Ord {
-}
+impl<T> Eq for QueueElement<T> where T: Ord {}
 
 impl<T> PartialOrd for QueueElement<T> where T: Ord {
     fn partial_cmp(
@@ -92,7 +91,13 @@ impl<T> EventQueue<T> where T: Ord {
         }
     }
 
-    pub fn now(self: &Self) -> &T {
+    pub fn now(self: &Self) -> T
+        where T: Clone
+    {
+        self.current_time.clone()
+    }
+
+    pub fn current_time(self: &Self) -> &T {
         &self.current_time
     }
 
