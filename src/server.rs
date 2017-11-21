@@ -38,6 +38,43 @@ impl<C, I, T> Server<C, I, T>
         Server { game, external, clock, current_time }
     }
 
+    /// runs until told to stop externally
+    pub fn run(self: &mut Self) {
+        loop {
+            for upd in self.external.try_iter() {
+                let should_exit = self.game.apply_update(upd);
+                if should_exit {
+                    return;
+                }
+            }
+            if let Some(next_event) = self.next() {
+                let now = time::Instant::now();
+                use ClockResult::*;
+                match self.clock.now_what(now, next_event) {
+                    Simulate { until } => {
+                        self.time.simulate_until(until);
+                    },
+                    Sleep { sleep_for } => {
+                        if let Ok(upd) = self.recv_timeout_or_sleep(sleep_for, now) {
+                            let should_exit = self.game.apply_update(upd);
+                            if should_exit {
+                                return;
+                            }
+                        }
+                    },
+                }
+            } else {
+                if let Ok(upd) = self.external.recv() {
+                    let should_exit = self.game.apply_update(upd);
+                    if should_exit {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 pub trait Interruption<T> where T: Ord {
