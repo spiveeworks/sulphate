@@ -101,10 +101,14 @@ impl<T> EventQueue<T> where T: Ord {
         &self.current_time
     }
 
-    pub fn next(&self) -> Option<&T> {
+    pub fn next_ref(&self) -> Option<&T> {
         self.queue
             .peek()
             .map(|qe| &qe.execute_time)
+    }
+
+    pub fn next(&self) -> Option<T> where T: Clone {
+        self.next_ref().map(|&time| time)
     }
 
     pub fn invoke_next(self: &mut Self, space: &mut entity_heap::EntityHeap) {
