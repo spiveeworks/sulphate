@@ -8,7 +8,6 @@ use event_queue;
 pub struct Server<C, I, T>
     where C: Clock<T>,
           I: Interruption<T>,
-          W: Write<T>,
           T: Ord,  // time
 {
     game: Game<T>,
@@ -22,8 +21,20 @@ struct Game<T> where T: Ord {
 }
 
 impl<T> Game<T> where T: Ord {
-    fn apply_update<I: Interruption<T>>(self: &mut Self, upd: I) -> bool {
+    // note this returns the result of the update, not of .progress_time()
+    fn apply_update<I: Interruption<T>>(
+        self: &mut Self,
+        upd: I,
+        in_game: T
+    ) -> bool
+        where T: Clone
+    {
+        self.time.progress_time(in_game);
         upd.update(&mut self.space, &mut self.time)
+    }
+
+    fn invoke_next(self: &mut Self) {
+        self.time.invoke_next(&mut self.space);
     }
 }
 
@@ -33,14 +44,13 @@ impl<C, I, T> Server<C, I, T>
           T: Ord + Clone,  // time
 {
     pub fn new(
-        space: entity_heap::EntityHeap<T>,
+        space: entity_heap::EntityHeap,
         time: event_queue::EventQueue<T>,
         external: mpsc::Receiver<I>,
         clock: C,
-        current_time: W,
-    ) {
+    ) -> Self {
         let game = Game { space, time };
-        Server { game, external, clock, current_time }
+        Server { game, external, clock }
     }
 
     fn recv_timeout_or_sleep(
@@ -50,11 +60,11 @@ impl<C, I, T> Server<C, I, T>
     ) -> Option<I> {
         let sleep_until = now + sleep_for;
         let result = self.external.recv_timeout(sleep_for);
-        if result.is_none() {
+        if result.is_err() {
             let sleep_for = sleep_until - time::Instant::now();
             thread::sleep(sleep_for);
         }
-        result
+        result.ok()
     }
 
     /// runs until told to stop externally
@@ -63,30 +73,39 @@ impl<C, I, T> Server<C, I, T>
         while !should_exit {
             let now = time::Instant::now();
             let in_game = self.clock.in_game(now);
-            let 
             if let Ok(upd) = self.external.try_recv() {
+                self.clock.finished_cycle(now, in_game.clone());
                 // first execute any external instructions
-                should_exit = self.game.apply_update(upd);
+                should_exit = self.game.apply_update(upd, in_game);
             } else {
-                // then execute any internal instructions
-                self.time.simulate_until(in_game);
-                self.clock.finished_cycle(now);
-                if let Some(et) = self.time.next() {
-                    // then wait for more instructions
-                    let sleep_for = self.clock.minimum_wait(now, et);
-                    let ext = self.recv_timeout_or_sleep(sleep_for, now);
-                    if let Some(upd) = ext {
-                        should_exit = self.game.apply_update(upd);
+                if let Some(et) = self.game.time.next() {
+                    if et <= in_game {
+                        self.clock.finished_cycle(now, et);
+                        // then execute any internal instructions
+                        self.game.invoke_next();
+                    } else {
+                        self.clock.end_cycles();
+                        // then wait for more instructions
+                        let sleep_for = self.clock
+                                            .minimum_wait(in_game, et.clone());
+                        let ext = self.recv_timeout_or_sleep(sleep_for, now);
+                        if let Some(upd) = ext {
+                            should_exit = self.game.apply_update(upd, et);
+                        }
                     }
                 } else if let Ok(upd) = self.external.recv() {
-                // if necessary wait forever
-                    should_exit = self.game.apply_update(upd);
+                    self.clock.end_cycles();
+                    // if necessary wait forever
+                    let now = time::Instant::now();
+                    let in_game = self.clock.in_game(now);
+                    should_exit = self.game.apply_update(upd, in_game);
                 } else {
-                // if the channel closes, and we have nothing to do, exit
+                    // if the channel closes, and we have nothing to do, exit
                     should_exit = true;
                 }
             }
         }
+        self.clock.end_cycles();
     }
 }
 
@@ -94,7 +113,7 @@ pub trait Interruption<T> where T: Ord {
     /// returns true if the server should stop
     fn update(
         self: Self,
-        space: &mut entity_heap::EntityHeap<T>,
+        space: &mut entity_heap::EntityHeap,
         time: &mut event_queue::EventQueue<T>,
     ) -> bool;
 }
@@ -110,6 +129,7 @@ pub trait Clock<T> where T: Ord {
     fn minimum_wait(
         self: &mut Self,
         in_game: T,
+        until: T,
     ) -> time::Duration;
     /// used to report that a device (e.g. the event queue) has finished
     /// a cycle.
@@ -118,6 +138,12 @@ pub trait Clock<T> where T: Ord {
     fn finished_cycle(
         self: &mut Self,
         now: time::Instant,
+        in_game: T,
+    );
+    /// used to report that a device has no work to do and does not need
+    /// the clock to stutter for it
+    fn end_cycles(
+        self: &mut Self
     );
 }
 
