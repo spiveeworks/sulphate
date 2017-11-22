@@ -101,10 +101,14 @@ impl<T> EventQueue<T> where T: Ord {
         &self.current_time
     }
 
-    pub fn next(&self) -> Option<&T> {
+    pub fn next_ref(&self) -> Option<&T> {
         self.queue
             .peek()
             .map(|qe| &qe.execute_time)
+    }
+
+    pub fn next(&self) -> Option<T> where T: Clone {
+        self.next_ref().map(Clone::clone)
     }
 
     pub fn invoke_next(self: &mut Self, space: &mut entity_heap::EntityHeap) {
@@ -117,13 +121,35 @@ impl<T> EventQueue<T> where T: Ord {
         }
     }
 
-    fn has_event_by(self: &mut Self, time: &T) -> bool {
-        if let Some(next_time) = self.next() {
+    fn has_event_by(self: &Self, time: &T) -> bool {
+        if let Some(next_time) = self.next_ref() {
             next_time <= time
         } else {
             false
         }
     }
+
+    pub fn is_empty(self: &Self) -> bool {
+        self.queue.is_empty()
+    }
+
+    /// progresses in-game time to the next event,
+    /// or to the specified time if that is sooner
+    /// returns the result of self.has_event_by(&until)
+    pub fn progress_time(self: &mut Self, until: T) -> bool
+        where T: Clone
+    {
+        let has_event_by = self.has_event_by(&until);
+        self.current_time = {
+            if has_event_by {
+                self.next().unwrap()
+            } else {
+                until
+            }
+        };
+        has_event_by
+    }
+
 
 
     pub fn simulate(
