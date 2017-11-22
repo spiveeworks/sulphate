@@ -1,3 +1,9 @@
+use std::sync::mpsc;
+use std::thread;
+use std::time;
+
+use entity_heap;
+use event_queue;
 
 pub struct Server<C, I, T>
     where C: Clock<T>,
@@ -8,7 +14,6 @@ pub struct Server<C, I, T>
     game: Game<T>,
     external: mpsc::Receiver<I>,
     clock: C,
-    current_time: W,
 }
 
 struct Game<T> where T: Ord {
@@ -38,35 +43,48 @@ impl<C, I, T> Server<C, I, T>
         Server { game, external, clock, current_time }
     }
 
+    fn recv_timeout_or_sleep(
+        self: &Self,
+        sleep_for: time::Duration,
+        now: time::Instant,
+    ) -> Option<I> {
+        let sleep_until = now + sleep_for;
+        let result = self.external.recv_timeout(sleep_for);
+        if result.is_none() {
+            let sleep_for = sleep_until - time::Instant::now();
+            thread::sleep(sleep_for);
+        }
+        result
+    }
+
     /// runs until told to stop externally
     pub fn run(self: &mut Self) {
         let mut should_exit = false;
         while !should_exit {
+            let now = time::Instant::now();
+            let in_game = self.clock.in_game(now);
+            let 
             if let Ok(upd) = self.external.try_recv() {
-            // first execute any external instructions
-                should_exit = self.game.apply_update(upd);
-            } else if let Some(next_event) = self.next() {
-                let now = time::Instant::now();
-                use ClockResult::*;
-                match self.clock.now_what(now, next_event) {
-                    Simulate { until } => {
-            // then execute any internal instruction
-                        self.time.simulate_until(until);
-                    },
-                    Sleep { sleep_for } => {
-            // then wait for something to do (whether internal or not)
-                        let ext = self.recv_timeout_or_sleep(sleep_for, now);
-                        if let Some(upd) = ext {
-                            should_exit = self.game.apply_update(upd);
-                        }
-                    },
-                }
-            } else if let Ok(upd) = self.external.recv() {
-            // if necessary wait forever
+                // first execute any external instructions
                 should_exit = self.game.apply_update(upd);
             } else {
-            // if the channel closes, and we have nothing to do, exit
-                should_exit = true;
+                // then execute any internal instructions
+                self.time.simulate_until(in_game);
+                self.clock.finished_cycle(now);
+                if let Some(et) = self.time.next() {
+                    // then wait for more instructions
+                    let sleep_for = self.clock.minimum_wait(now, et);
+                    let ext = self.recv_timeout_or_sleep(sleep_for, now);
+                    if let Some(upd) = ext {
+                        should_exit = self.game.apply_update(upd);
+                    }
+                } else if let Ok(upd) = self.external.recv() {
+                // if necessary wait forever
+                    should_exit = self.game.apply_update(upd);
+                } else {
+                // if the channel closes, and we have nothing to do, exit
+                    should_exit = true;
+                }
             }
         }
     }
@@ -82,30 +100,24 @@ pub trait Interruption<T> where T: Ord {
 }
 
 pub trait Clock<T> where T: Ord {
-    fn now_what(
+    /// convert a real time to an in-game time
+    fn in_game(
         self: &mut Self,
-        next_event: Option<units::Time>,
-    ) -> ClockResult;
-}
-
-pub enum ClockResult<T> where T: Ord {
-    Simulate { until: T },
-    Sleep { until: time::Duration },
-    SleepIndefinite,
-}
-
-/// Clock for possible use in Server objects,
-/// simply progresses to the next available event
-pub struct InstantClock;
-
-
-impl<T> Clock<T> for InstantClock where T: Ord {
-    fn now(
+        now: time::Instant,
+    ) -> T;
+    /// convert an in-game time to a possible real time
+    /// (it is not an error for the clock to run slower than it claims)
+    fn minimum_wait(
         self: &mut Self,
-        next_event: Option<T>,
-    ) -> ClockResult<T> {
-        next_event.map(|then| ClockResult::Simulate(then))
-                  .unwrap_or(SleepIndefinite)
-    }
+        in_game: T,
+    ) -> time::Duration;
+    /// used to report that a device (e.g. the event queue) has finished
+    /// a cycle.
+    /// Use this to slow the clock when threads are lagging.
+    /// (e.g. don't let clock exceed any threads by one 16th of a second)
+    fn finished_cycle(
+        self: &mut Self,
+        now: time::Instant,
+    );
 }
 
