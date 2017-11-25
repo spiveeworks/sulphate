@@ -83,6 +83,45 @@ impl EntityHeap {
             .remove(&(ty, k))
             .map(unwrap_box)
     }
+
+    pub fn iter(self: &Self) -> Iter {
+        let inner = self.content.iter();
+        Iter { inner }
+    }
+
+    pub fn iter_mut(self: &mut Self) -> IterMut {
+        let inner = self.content.iter_mut();
+        IterMut { inner }
+    }
+}
+
+pub struct Iter<'a> {
+    inner: collections::hash_map::Iter<'a, Key, Box<Any>>
+}
+
+pub struct IterMut<'a> {
+    inner: collections::hash_map::IterMut<'a, Key, Box<Any>>
+}
+
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (UID, &'a Any);
+
+    fn next(self: &mut Self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(&(_ty, id), val)| (id, &**val))
+    }
+}
+
+impl<'a> Iterator for IterMut<'a> {
+    type Item = (UID, &'a mut Any);
+
+    fn next(self: &mut Self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|(&(_ty, id), val)| (id, &mut **val))
+    }
 }
 
 
