@@ -1,6 +1,7 @@
 [package]
-name = "lil-city"
-version = "0.0.0"
+name = "sulphate-lib"
+version = "0.1.0"
 authors = ["SpiveeWorks <spiveehere@gmail.com>"]
 
 [dependencies]
+rand = "0.3"
