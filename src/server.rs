@@ -2,27 +2,26 @@ use std::sync::mpsc;
 use std::thread;
 use std::time;
 
-use entity_heap;
 use event_queue;
 
-pub struct Server<C, I, T>
+pub struct Server<C, I, T, W>
     where C: Clock<T>,
-          I: Interruption<T>,
-          T: Ord,  // time
+          I: Interruption<T, W>,
+          T: Ord + Clone,  // time
 {
-    game: Game<T>,
+    game: Game<T, W>,
     external: mpsc::Receiver<I>,
     clock: C,
 }
 
-struct Game<T> where T: Ord {
-    space: entity_heap::EntityHeap,
-    time: event_queue::EventQueue<T>,
+struct Game<T, W> where T: Ord {
+    time: event_queue::EventQueue<T, W>,
+    world: W,
 }
 
-impl<T> Game<T> where T: Ord {
+impl<T, W> Game<T, W> where T: Ord {
     // note this returns the result of the update, not of .progress_time()
-    fn apply_update<I: Interruption<T>>(
+    fn apply_update<I: Interruption<T, W>>(
         self: &mut Self,
         upd: I,
         in_game: T
@@ -30,26 +29,26 @@ impl<T> Game<T> where T: Ord {
         where T: Clone
     {
         self.time.progress_time(in_game);
-        upd.update(&mut self.space, &mut self.time)
+        upd.update(&mut self.time, &mut self.world)
     }
 
     fn invoke_next(self: &mut Self) {
-        self.time.invoke_next(&mut self.space);
+        self.time.invoke_next(&mut self.world);
     }
 }
 
-impl<C, I, T> Server<C, I, T>
+impl<C, I, T, W> Server<C, I, T, W>
     where C: Clock<T>,
-          I: Interruption<T>,
+          I: Interruption<T, W>,
           T: Ord + Clone,  // time
 {
     pub fn new(
-        space: entity_heap::EntityHeap,
-        time: event_queue::EventQueue<T>,
+        time: event_queue::EventQueue<T, W>,
+        world: W,
         external: mpsc::Receiver<I>,
         clock: C,
     ) -> Self {
-        let game = Game { space, time };
+        let game = Game { time, world };
         Server { game, external, clock }
     }
 
@@ -109,12 +108,12 @@ impl<C, I, T> Server<C, I, T>
     }
 }
 
-pub trait Interruption<T> where T: Ord {
+pub trait Interruption<T, W> where T: Ord {
     /// returns true if the server should stop
     fn update(
         self: Self,
-        space: &mut entity_heap::EntityHeap,
-        time: &mut event_queue::EventQueue<T>,
+        time: &mut event_queue::EventQueue<T, W>,
+        world: &mut W,
     ) -> bool;
 }
 

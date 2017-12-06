@@ -2,13 +2,11 @@ use std::cmp;
 use std::collections;
 use std::ops;
 
-use entity_heap;
-
-pub trait Event<T> where T: Ord {
+pub trait Event<T, W> where T: Ord {
     fn invoke(
         self: Self,
-        space: &mut entity_heap::EntityHeap,
-        time: &mut EventQueue<T>,
+        time: &mut EventQueue<T, W>,
+        world: &mut W,
     );
 }
 
@@ -16,35 +14,35 @@ pub trait Event<T> where T: Ord {
 //   since by-value makes more sense to write,
 //   and potentially allows implementors to use their own code
 //   outside of event contexts
-trait PolyEvent<T>: Event<T> where T: Ord {
+trait PolyEvent<T, W>: Event<T, W> where T: Ord {
     fn invoke_box(
         self: Box<Self>,
-        space: &mut entity_heap::EntityHeap,
-        time: &mut EventQueue<T>,
+        time: &mut EventQueue<T, W>,
+        world: &mut W,
     );
 }
 
 // note the resemlence to FnBox
-impl<E, T> PolyEvent<T> for E
-    where E: Event<T>,
+impl<E, T, W> PolyEvent<T, W> for E
+    where E: Event<T, W>,
           T: Ord,
 {
     fn invoke_box(
         self: Box<Self>,
-        space: &mut entity_heap::EntityHeap,
-        time: &mut EventQueue<T>,
+        time: &mut EventQueue<T, W>,
+        world: &mut W,
     ) {
-        self.invoke(space, time);
+        self.invoke(time, world);
     }
 }
 
 
-struct QueueElement<T> where T: Ord {
+struct QueueElement<T, W> where T: Ord {
     execute_time: T,
-    call_back: Box<PolyEvent<T>>,
+    call_back: Box<PolyEvent<T, W>>,
 }
 
-impl<T> PartialEq for QueueElement<T> where T: Ord {
+impl<T, W> PartialEq for QueueElement<T, W> where T: Ord {
     fn eq(
         self: &Self,
         other: &Self,
@@ -53,9 +51,9 @@ impl<T> PartialEq for QueueElement<T> where T: Ord {
     }
 }
 
-impl<T> Eq for QueueElement<T> where T: Ord {}
+impl<T, W> Eq for QueueElement<T, W> where T: Ord {}
 
-impl<T> PartialOrd for QueueElement<T> where T: Ord {
+impl<T, W> PartialOrd for QueueElement<T, W> where T: Ord {
     fn partial_cmp(
         self: &Self,
         other: &Self
@@ -64,7 +62,7 @@ impl<T> PartialOrd for QueueElement<T> where T: Ord {
     }
 }
 
-impl<T> Ord for QueueElement<T> where T: Ord {
+impl<T, W> Ord for QueueElement<T, W> where T: Ord {
     fn cmp(
         self: &Self,
         other: &Self
@@ -78,12 +76,12 @@ impl<T> Ord for QueueElement<T> where T: Ord {
     }
 }
 
-pub struct EventQueue<T> where T: Ord {
+pub struct EventQueue<T, W> where T: Ord {
     current_time: T,
-    queue: collections::BinaryHeap<QueueElement<T>>,
+    queue: collections::BinaryHeap<QueueElement<T, W>>,
 }
 
-impl<T> EventQueue<T> where T: Ord {
+impl<T, W> EventQueue<T, W> where T: Ord {
     pub fn new(initial_time: T) -> Self {
         EventQueue {
             current_time: initial_time,
@@ -111,13 +109,13 @@ impl<T> EventQueue<T> where T: Ord {
         self.next_ref().map(Clone::clone)
     }
 
-    pub fn invoke_next(self: &mut Self, space: &mut entity_heap::EntityHeap) {
+    pub fn invoke_next(self: &mut Self, world: &mut W) {
         if let Some(element) = self.queue.pop() {
             let QueueElement { execute_time, call_back } = element;
             if self.current_time < execute_time {
                 self.current_time = execute_time;
             }
-            call_back.invoke_box(space, self);
+            call_back.invoke_box(self, world);
         }
     }
 
@@ -154,17 +152,17 @@ impl<T> EventQueue<T> where T: Ord {
 
     pub fn simulate(
         self: &mut Self,
-        space: &mut entity_heap::EntityHeap,
+        world: &mut W,
         until: T,
     ) {
         while self.has_event_by(&until) {
-            self.invoke_next(space);
+            self.invoke_next(world);
         }
         self.current_time = until;
     }
 
     pub fn enqueue_absolute<E>(self: &mut Self, event: E, execute_time: T)
-        where E: 'static + Event<T>
+        where E: 'static + Event<T, W>
     {
         let call_back = Box::new(event);
         let element = QueueElement { call_back, execute_time };
@@ -172,7 +170,7 @@ impl<T> EventQueue<T> where T: Ord {
     }
 
     pub fn enqueue_relative<E, D>(self: &mut Self, event: E, execute_delay: D)
-        where E: 'static + Event<T>,
+        where E: 'static + Event<T, W>,
               T: ops::Add<D, Output=T> + Clone,
     {
         let execute_time = self.current_time.clone() + execute_delay;
