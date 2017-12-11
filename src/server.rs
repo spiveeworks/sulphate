@@ -71,39 +71,32 @@ impl<C, I, T, W> Server<C, I, T, W>
     /// runs until told to stop externally
     pub fn run(self: &mut Self) {
         let mut should_exit = false;
+        let mut upd = None;
         while !should_exit {
             let now = time::Instant::now();
             let in_game = self.clock.in_game(now);
-            if let Ok(upd) = self.external.try_recv() {
+            upd = upd.or_else(|| self.external.try_recv().ok());
+            if let Some(upd) = upd.take() {
                 self.clock.finished_cycle(now, in_game.clone());
-                // first execute any external instructions
                 should_exit = self.game.apply_update(upd, in_game);
-            } else {
-                if let Some(et) = self.game.time.next() {
-                    if et <= in_game {
-                        self.clock.finished_cycle(now, et);
-                        // then execute any internal instructions
-                        self.game.invoke_next();
-                    } else {
-                        self.clock.end_cycles();
-                        // then wait for more instructions
-                        let sleep_for = self.clock
-                                            .minimum_wait(in_game, et.clone());
-                        let ext = self.recv_timeout_or_sleep(sleep_for, now);
-                        if let Some(upd) = ext {
-                            should_exit = self.game.apply_update(upd, et);
-                        }
-                    }
-                } else if let Ok(upd) = self.external.recv() {
-                    self.clock.end_cycles();
-                    // if necessary wait forever
-                    let now = time::Instant::now();
-                    let in_game = self.clock.in_game(now);
-                    should_exit = self.game.apply_update(upd, in_game);
+            } else if let Some(et) = self.game.time.next() {
+                if et <= in_game {
+                    self.clock.finished_cycle(now, et);
+                    // then execute any internal instructions
+                    self.game.invoke_next();
                 } else {
-                    // if the channel closes, and we have nothing to do, exit
-                    should_exit = true;
+                    self.clock.end_cycles();
+                    // then wait for more instructions
+                    let sleep_for = self.clock
+                                        .minimum_wait(in_game, et.clone());
+                    upd = self.recv_timeout_or_sleep(sleep_for, now);
                 }
+            } else {
+                self.clock.end_cycles();
+                // if necessary wait forever
+                upd = self.external.recv().ok();
+                // if the channel closes, and we have nothing to do, exit
+                should_exit = upd.is_none();
             }
         }
         self.clock.end_cycles();
