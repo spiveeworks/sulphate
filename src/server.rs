@@ -60,8 +60,10 @@ impl<C, I, T, W> Server<C, I, T, W>
         let sleep_until = now + sleep_for;
         let result = self.external.recv_timeout(sleep_for);
         if result.is_err() {
-            let sleep_for = sleep_until - time::Instant::now();
-            thread::sleep(sleep_for);
+            let now = time::Instant::now();
+            if sleep_until > now {
+                thread::sleep(sleep_until - now);
+            }
         }
         result.ok()
     }
