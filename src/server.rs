@@ -3,52 +3,46 @@ use std::thread;
 use std::time;
 
 use event_queue;
+use units;
 
-pub struct Server<C, I, T, W>
+pub struct Server<C, I, G, E = event_queue::EventBox<G>, T = units::Time>
     where C: Clock<T>,
-          I: Interruption<T, W>,
+          I: Interruption<G>,
+          G: event_queue::Simulation<E, T>,
+          E: event_queue::GeneralEvent<G>,
           T: Ord + Clone,  // time
 {
-    game: Game<T, W>,
+    game: G,
     external: mpsc::Receiver<I>,
     clock: C,
 }
 
-struct Game<T, W> where T: Ord {
-    time: event_queue::EventQueue<T, W>,
-    world: W,
+// note this returns the result of the update, not of .progress_time()
+fn apply_update<I, G, E, T>(
+    game: &mut G,
+    upd: I,
+    in_game: T
+) -> bool
+    where G: event_queue::Simulation<E, T>,
+          I: Interruption<G>,
+          T: Clone,
+{
+    game.as_mut().progress_time(in_game);
+    upd.update(game);
 }
 
-impl<T, W> Game<T, W> where T: Ord {
-    // note this returns the result of the update, not of .progress_time()
-    fn apply_update<I: Interruption<T, W>>(
-        self: &mut Self,
-        upd: I,
-        in_game: T
-    ) -> bool
-        where T: Clone
-    {
-        self.time.progress_time(in_game);
-        upd.update(&mut self.time, &mut self.world)
-    }
-
-    fn invoke_next(self: &mut Self) {
-        self.time.invoke_next(&mut self.world);
-    }
-}
-
-impl<C, I, T, W> Server<C, I, T, W>
+impl<C, I, G, E, T> Server<C, I, G, E, T>
     where C: Clock<T>,
-          I: Interruption<T, W>,
+          I: Interruption<G>,
+          G: event_queue::Simulation<E, T>,
+          E: event_queue::GeneralEvent<G>,
           T: Ord + Clone,  // time
 {
     pub fn new(
-        time: event_queue::EventQueue<T, W>,
-        world: W,
+        game: &mut G,
         external: mpsc::Receiver<I>,
         clock: C,
     ) -> Self {
-        let game = Game { time, world };
         Server { game, external, clock }
     }
 
@@ -103,16 +97,15 @@ impl<C, I, T, W> Server<C, I, T, W>
     }
 }
 
-pub trait Interruption<T, W> where T: Ord {
+pub trait Interruption<G> {
     /// returns true if the server should stop
     fn update(
         self: Self,
-        time: &mut event_queue::EventQueue<T, W>,
-        world: &mut W,
+        game: &mut G,
     ) -> bool;
 }
 
-pub trait Clock<T> where T: Ord {
+pub trait Clock<T = f64> where T: Ord {
     /// convert a real time to an in-game time
     fn in_game(
         self: &mut Self,
