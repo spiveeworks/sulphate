@@ -3,18 +3,11 @@ use std::thread;
 use std::time;
 
 use event_queue;
-use units;
 
-pub struct Server<C, I, G, E = event_queue::EventBox<G>, T = units::Time>
-    where C: Clock<T>,
-          I: Interruption<G>,
-          G: event_queue::Simulation<E, T>,
-          E: event_queue::GeneralEvent<G>,
-          T: Ord + Clone,  // time
-{
-    game: G,
-    external: mpsc::Receiver<I>,
+pub struct Server<C, I, G> {
     clock: C,
+    external: mpsc::Receiver<I>,
+    game: G,
 }
 
 // note this returns the result of the update, not of .progress_time()
@@ -23,23 +16,21 @@ fn apply_update<I, G, E, T>(
     upd: I,
     in_game: T
 ) -> bool
-    where G: event_queue::Simulation<E, T>,
-          I: Interruption<G>,
-          T: Clone,
-{
-    game.as_mut().progress_time(in_game);
-    upd.update(game);
-}
 
-impl<C, I, G, E, T> Server<C, I, G, E, T>
-    where C: Clock<T>,
-          I: Interruption<G>,
+    where I: Interruption<G>,
           G: event_queue::Simulation<E, T>,
           E: event_queue::GeneralEvent<G>,
-          T: Ord + Clone,  // time
+          T: Ord + Clone,
+{
+    game.as_mut().progress_time(in_game);
+    upd.update(game)
+}
+
+impl<C, I, G> Server<C, I, G>
+    where I: Interruption<G>
 {
     pub fn new(
-        game: &mut G,
+        game: G,
         external: mpsc::Receiver<I>,
         clock: C,
     ) -> Self {
@@ -63,7 +54,12 @@ impl<C, I, G, E, T> Server<C, I, G, E, T>
     }
 
     /// runs until told to stop externally
-    pub fn run(self: &mut Self) {
+    pub fn run<E, T>(self: &mut Self)
+        where C: Clock<T>,
+              G: event_queue::Simulation<E, T>,
+              E: event_queue::GeneralEvent<G>,
+              T: Ord + Clone,
+    {
         let mut should_exit = false;
         let mut upd = None;
         while !should_exit {
@@ -72,8 +68,8 @@ impl<C, I, G, E, T> Server<C, I, G, E, T>
             upd = upd.or_else(|| self.external.try_recv().ok());
             if let Some(upd) = upd.take() {
                 self.clock.finished_cycle(now, in_game.clone());
-                should_exit = self.game.apply_update(upd, in_game);
-            } else if let Some(et) = self.game.time.next() {
+                should_exit = apply_update(&mut self.game, upd, in_game);
+            } else if let Some(et) = self.game.as_mut().soonest() {
                 if et <= in_game {
                     self.clock.finished_cycle(now, et);
                     // then execute any internal instructions

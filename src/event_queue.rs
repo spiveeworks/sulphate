@@ -44,8 +44,9 @@ trait PolyEvent<G, E = EventBox<G>>: Event<G, E>
 }
 
 // note the resemlence to FnBox
-impl<G, E> PolyEvent<G, E> for E
-    where E: Event<G, E>,
+impl<G, E, Es> PolyEvent<G, E> for Es
+    where Es: Event<G, E>,
+          E: GeneralEvent<G>,
 {
     fn invoke_box(
         self: Box<Self>,
@@ -63,14 +64,6 @@ impl<G> GeneralEvent<G> for EventBox<G> {
         game: &mut G,
     ) {
         self.0.invoke_box(game)
-    }
-}
-
-impl<G, Es> From<Es> for EventBox<G>
-    where Es: Event<G>
-{
-    fn from(event: Es) -> Self {
-        EventBox(Box::new(event))
     }
 }
 
@@ -137,7 +130,7 @@ impl<E, T> EventQueue<E, T>
 {
     pub fn new(initial_time: T) -> Self {
         EventQueue {
-            current_time: initial_time,
+            now: initial_time,
             queue: collections::BinaryHeap::new(),
         }
     }
@@ -146,11 +139,11 @@ impl<E, T> EventQueue<E, T>
     pub fn now(self: &Self) -> T
         where T: Clone
     {
-        self.current_time.clone()
+        self.now.clone()
     }
 
     pub fn now_ref(self: &Self) -> &T {
-        &self.current_time
+        &self.now
     }
 
     pub fn soonest_ref(&self) -> Option<&T> {
@@ -166,7 +159,7 @@ impl<E, T> EventQueue<E, T>
     }
 
     fn has_event_by(self: &Self, time: &T) -> bool {
-        if let Some(next_time) = self.next_ref() {
+        if let Some(next_time) = self.soonest_ref() {
             next_time <= time
         } else {
             false
@@ -189,7 +182,7 @@ impl<E, T> EventQueue<E, T>
         where Es: Into<E>,
               T: ops::Add<D, Output=T> + Clone,
     {
-        let execute_time = self.current_time() + execute_delay;
+        let execute_time = self.now() + execute_delay;
         self.enqueue_absolute(event, execute_time);
     }
 
@@ -211,6 +204,30 @@ impl<E, T> EventQueue<E, T>
     }
 }
 
+impl<G, T> PolyEventQueue<G, T>
+    where T: Ord
+{
+    pub fn enqueue_box_absolute<Es>(
+        self: &mut Self,
+        event: Es,
+        execute_time: T,
+    )
+        where Es: 'static + Event<G>,
+    {
+        self.enqueue_absolute(EventBox(Box::new(event)), execute_time);
+    }
+
+    pub fn enqueue_box_relative<Es, D>(
+        self: &mut Self,
+        event: Es,
+        execute_delay: D,
+    )
+        where Es: 'static + Event<G>,
+              T: ops::Add<D, Output=T> + Clone,
+    {
+        self.enqueue_relative(EventBox(Box::new(event)), execute_delay);
+    }
+}
 
 pub trait Simulation<E, T>
     where Self: Sized + AsMut<EventQueue<E, T>>,
@@ -224,7 +241,7 @@ pub trait Simulation<E, T>
 impl<G, E, T> Simulation<E, T> for G
     where G: AsMut<EventQueue<E, T>>,
           T: Ord,
-          E: Event<G>,
+          E: GeneralEvent<G>,
 {
     fn invoke_next(self: &mut Self) {
         let next_event = {
