@@ -2,8 +2,6 @@ use std::cmp;
 use std::collections;
 use std::ops;
 
-use units;
-
 /// The general event trait.
 ///
 /// This trait is for enums that contain multiple kinds of
@@ -67,7 +65,7 @@ impl<G> GeneralEvent<G> for EventBox<G> {
     }
 }
 
-struct QueueElement<E, T = units::Time>
+struct QueueElement<E, T>
     where T: Ord
 {
     execute_time: T,
@@ -116,14 +114,14 @@ impl<E, T> Ord for QueueElement<E, T>
     }
 }
 
-pub struct EventQueue<E, T = units::Time>
+pub struct EventQueue<E, T>
     where T: Ord
 {
     now: T,
     queue: collections::BinaryHeap<QueueElement<E, T>>,
 }
 
-pub type PolyEventQueue<G, T = units::Time> = EventQueue<EventBox<G>, T>;
+pub type PolyEventQueue<G, T> = EventQueue<EventBox<G>, T>;
 
 impl<E, T> EventQueue<E, T>
     where T: Ord
