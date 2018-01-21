@@ -2,47 +2,79 @@ use std::cmp;
 use std::collections;
 use std::ops;
 
-pub trait Event<T, W> where T: Ord {
-    fn invoke(
-        self: Self,
-        time: &mut EventQueue<T, W>,
-        world: &mut W,
-    );
+/// The general event trait.
+///
+/// This trait is for enums that contain multiple kinds of
+///   [Event](../trait.Event.html),
+///
+/// It is also implemented for the [EventBox](../struct.EventBox.html) struct,
+/// which contains an Event trait object.
+pub trait GeneralEvent<G> {
+    fn invoke(self: Self, game: &mut G);
+}
+
+/// The main event trait.
+///
+/// By default event-queues will polymorphically box up implementors of this
+/// trait, allowing for simple extension to your event system.
+///
+/// Alternatively you can make your own enum type, that sums up all of your
+/// Event implementors, and avoid the virtual method calls.
+///
+/// Note that the supertrait Into<EventBox<G>> is automatically implemented.
+pub trait Event<G, E = EventBox<G>>
+    where E: GeneralEvent<G>,
+{
+    fn invoke(self: Self, game: &mut G);
 }
 
 // polymorphise Event monomorphisms,
 //   since by-value makes more sense to write,
 //   and potentially allows implementors to use their own code
 //   outside of event contexts
-trait PolyEvent<T, W>: Event<T, W> where T: Ord {
+trait PolyEvent<G, E = EventBox<G>>: Event<G, E>
+    where E: GeneralEvent<G>,
+{
     fn invoke_box(
         self: Box<Self>,
-        time: &mut EventQueue<T, W>,
-        world: &mut W,
+        game: &mut G,
     );
 }
 
 // note the resemlence to FnBox
-impl<E, T, W> PolyEvent<T, W> for E
-    where E: Event<T, W>,
-          T: Ord,
+impl<G, E, Es> PolyEvent<G, E> for Es
+    where Es: Event<G, E>,
+          E: GeneralEvent<G>,
 {
     fn invoke_box(
         self: Box<Self>,
-        time: &mut EventQueue<T, W>,
-        world: &mut W,
+        game: &mut G,
     ) {
-        self.invoke(time, world);
+        self.invoke(game);
     }
 }
 
+pub struct EventBox<G>(Box<PolyEvent<G>>);
 
-struct QueueElement<T, W> where T: Ord {
-    execute_time: T,
-    call_back: Box<PolyEvent<T, W>>,
+impl<G> GeneralEvent<G> for EventBox<G> {
+    fn invoke(
+        self: Self,
+        game: &mut G,
+    ) {
+        self.0.invoke_box(game)
+    }
 }
 
-impl<T, W> PartialEq for QueueElement<T, W> where T: Ord {
+struct QueueElement<E, T>
+    where T: Ord
+{
+    execute_time: T,
+    call_back: E,
+}
+
+impl<E, T> PartialEq for QueueElement<E, T>
+    where T: Ord
+{
     fn eq(
         self: &Self,
         other: &Self,
@@ -51,9 +83,13 @@ impl<T, W> PartialEq for QueueElement<T, W> where T: Ord {
     }
 }
 
-impl<T, W> Eq for QueueElement<T, W> where T: Ord {}
+impl<E, T> Eq for QueueElement<E, T>
+    where T: Ord
+{}
 
-impl<T, W> PartialOrd for QueueElement<T, W> where T: Ord {
+impl<E, T> PartialOrd for QueueElement<E, T>
+    where T: Ord
+{
     fn partial_cmp(
         self: &Self,
         other: &Self
@@ -62,7 +98,9 @@ impl<T, W> PartialOrd for QueueElement<T, W> where T: Ord {
     }
 }
 
-impl<T, W> Ord for QueueElement<T, W> where T: Ord {
+impl<E, T> Ord for QueueElement<E, T>
+    where T: Ord
+{
     fn cmp(
         self: &Self,
         other: &Self
@@ -76,51 +114,50 @@ impl<T, W> Ord for QueueElement<T, W> where T: Ord {
     }
 }
 
-pub struct EventQueue<T, W> where T: Ord {
-    current_time: T,
-    queue: collections::BinaryHeap<QueueElement<T, W>>,
+pub struct EventQueue<E, T>
+    where T: Ord
+{
+    now: T,
+    queue: collections::BinaryHeap<QueueElement<E, T>>,
 }
 
-impl<T, W> EventQueue<T, W> where T: Ord {
+pub type PolyEventQueue<G, T> = EventQueue<EventBox<G>, T>;
+
+impl<E, T> EventQueue<E, T>
+    where T: Ord
+{
     pub fn new(initial_time: T) -> Self {
         EventQueue {
-            current_time: initial_time,
+            now: initial_time,
             queue: collections::BinaryHeap::new(),
         }
     }
 
+
     pub fn now(self: &Self) -> T
         where T: Clone
     {
-        self.current_time.clone()
+        self.now.clone()
     }
 
-    pub fn current_time(self: &Self) -> &T {
-        &self.current_time
+    pub fn now_ref(self: &Self) -> &T {
+        &self.now
     }
 
-    pub fn next_ref(&self) -> Option<&T> {
+    pub fn soonest_ref(&self) -> Option<&T> {
         self.queue
             .peek()
             .map(|qe| &qe.execute_time)
     }
 
-    pub fn next(&self) -> Option<T> where T: Clone {
-        self.next_ref().map(Clone::clone)
-    }
-
-    pub fn invoke_next(self: &mut Self, world: &mut W) {
-        if let Some(element) = self.queue.pop() {
-            let QueueElement { execute_time, call_back } = element;
-            if self.current_time < execute_time {
-                self.current_time = execute_time;
-            }
-            call_back.invoke_box(self, world);
-        }
+    pub fn soonest(&self) -> Option<T>
+        where T: Clone
+    {
+        self.soonest_ref().map(Clone::clone)
     }
 
     fn has_event_by(self: &Self, time: &T) -> bool {
-        if let Some(next_time) = self.next_ref() {
+        if let Some(next_time) = self.soonest_ref() {
             next_time <= time
         } else {
             false
@@ -131,6 +168,22 @@ impl<T, W> EventQueue<T, W> where T: Ord {
         self.queue.is_empty()
     }
 
+    pub fn enqueue_absolute<Es>(self: &mut Self, event: Es, execute_time: T)
+        where Es: Into<E>
+    {
+        let call_back = event.into();
+        let element = QueueElement { call_back, execute_time };
+        self.queue.push(element);
+    }
+
+    pub fn enqueue_relative<Es, D>(self: &mut Self, event: Es, execute_delay: D)
+        where Es: Into<E>,
+              T: ops::Add<D, Output=T> + Clone,
+    {
+        let execute_time = self.now() + execute_delay;
+        self.enqueue_absolute(event, execute_time);
+    }
+
     /// progresses in-game time to the next event,
     /// or to the specified time if that is sooner
     /// returns the result of self.has_event_by(&until)
@@ -138,43 +191,79 @@ impl<T, W> EventQueue<T, W> where T: Ord {
         where T: Clone
     {
         let has_event_by = self.has_event_by(&until);
-        self.current_time = {
+        self.now = {
             if has_event_by {
-                self.next().unwrap()
+                self.soonest().unwrap()
             } else {
                 until
             }
         };
         has_event_by
     }
+}
 
-
-
-    pub fn simulate(
+impl<G, T> PolyEventQueue<G, T>
+    where T: Ord
+{
+    pub fn enqueue_box_absolute<Es>(
         self: &mut Self,
-        world: &mut W,
-        until: T,
-    ) {
-        while self.has_event_by(&until) {
-            self.invoke_next(world);
-        }
-        self.current_time = until;
-    }
-
-    pub fn enqueue_absolute<E>(self: &mut Self, event: E, execute_time: T)
-        where E: 'static + Event<T, W>
+        event: Es,
+        execute_time: T,
+    )
+        where Es: 'static + Event<G>,
     {
-        let call_back = Box::new(event);
-        let element = QueueElement { call_back, execute_time };
-        self.queue.push(element);
+        self.enqueue_absolute(EventBox(Box::new(event)), execute_time);
     }
 
-    pub fn enqueue_relative<E, D>(self: &mut Self, event: E, execute_delay: D)
-        where E: 'static + Event<T, W>,
+    pub fn enqueue_box_relative<Es, D>(
+        self: &mut Self,
+        event: Es,
+        execute_delay: D,
+    )
+        where Es: 'static + Event<G>,
               T: ops::Add<D, Output=T> + Clone,
     {
-        let execute_time = self.current_time.clone() + execute_delay;
-        self.enqueue_absolute(event, execute_time);
+        self.enqueue_relative(EventBox(Box::new(event)), execute_delay);
+    }
+}
+
+pub trait Simulation<E, T>
+    where Self: Sized + AsMut<EventQueue<E, T>>,
+          T: Ord,
+          E: GeneralEvent<Self>,
+{
+    fn invoke_next(self: &mut Self);
+    fn simulate(self: &mut Self, until: T);
+}
+
+impl<G, E, T> Simulation<E, T> for G
+    where G: AsMut<EventQueue<E, T>>,
+          T: Ord,
+          E: GeneralEvent<G>,
+{
+    fn invoke_next(self: &mut Self) {
+        let next_event = {
+            let time = self.as_mut();
+            let element = time.queue.pop();
+            if element.is_none() {
+                return
+            }
+            let QueueElement { execute_time, call_back } = element.unwrap();
+
+            if time.now < execute_time {
+                time.now = execute_time;
+            }
+            call_back
+        };
+
+        next_event.invoke(self);
+    }
+
+    fn simulate(self: &mut Self, until: T) {
+        while self.as_mut().has_event_by(&until) {
+            self.invoke_next();
+        }
+        self.as_mut().now = until;
     }
 }
 

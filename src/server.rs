@@ -4,51 +4,36 @@ use std::time;
 
 use event_queue;
 
-pub struct Server<C, I, T, W>
-    where C: Clock<T>,
-          I: Interruption<T, W>,
-          T: Ord + Clone,  // time
-{
-    game: Game<T, W>,
-    external: mpsc::Receiver<I>,
+pub struct Server<C, I, G> {
     clock: C,
+    external: mpsc::Receiver<I>,
+    game: G,
 }
 
-struct Game<T, W> where T: Ord {
-    time: event_queue::EventQueue<T, W>,
-    world: W,
+// note this returns the result of the update, not of .progress_time()
+fn apply_update<I, G, E, T>(
+    game: &mut G,
+    upd: I,
+    in_game: T
+) -> bool
+
+    where I: Interruption<G>,
+          G: event_queue::Simulation<E, T>,
+          E: event_queue::GeneralEvent<G>,
+          T: Ord + Clone,
+{
+    game.as_mut().progress_time(in_game);
+    upd.update(game)
 }
 
-impl<T, W> Game<T, W> where T: Ord {
-    // note this returns the result of the update, not of .progress_time()
-    fn apply_update<I: Interruption<T, W>>(
-        self: &mut Self,
-        upd: I,
-        in_game: T
-    ) -> bool
-        where T: Clone
-    {
-        self.time.progress_time(in_game);
-        upd.update(&mut self.time, &mut self.world)
-    }
-
-    fn invoke_next(self: &mut Self) {
-        self.time.invoke_next(&mut self.world);
-    }
-}
-
-impl<C, I, T, W> Server<C, I, T, W>
-    where C: Clock<T>,
-          I: Interruption<T, W>,
-          T: Ord + Clone,  // time
+impl<C, I, G> Server<C, I, G>
+    where I: Interruption<G>
 {
     pub fn new(
-        time: event_queue::EventQueue<T, W>,
-        world: W,
+        game: G,
         external: mpsc::Receiver<I>,
         clock: C,
     ) -> Self {
-        let game = Game { time, world };
         Server { game, external, clock }
     }
 
@@ -69,7 +54,12 @@ impl<C, I, T, W> Server<C, I, T, W>
     }
 
     /// runs until told to stop externally
-    pub fn run(self: &mut Self) {
+    pub fn run<E, T>(self: &mut Self)
+        where C: Clock<T>,
+              G: event_queue::Simulation<E, T>,
+              E: event_queue::GeneralEvent<G>,
+              T: Ord + Clone,
+    {
         let mut should_exit = false;
         let mut upd = None;
         while !should_exit {
@@ -78,8 +68,8 @@ impl<C, I, T, W> Server<C, I, T, W>
             upd = upd.or_else(|| self.external.try_recv().ok());
             if let Some(upd) = upd.take() {
                 self.clock.finished_cycle(now, in_game.clone());
-                should_exit = self.game.apply_update(upd, in_game);
-            } else if let Some(et) = self.game.time.next() {
+                should_exit = apply_update(&mut self.game, upd, in_game);
+            } else if let Some(et) = self.game.as_mut().soonest() {
                 if et <= in_game {
                     self.clock.finished_cycle(now, et);
                     // then execute any internal instructions
@@ -103,16 +93,15 @@ impl<C, I, T, W> Server<C, I, T, W>
     }
 }
 
-pub trait Interruption<T, W> where T: Ord {
+pub trait Interruption<G> {
     /// returns true if the server should stop
     fn update(
         self: Self,
-        time: &mut event_queue::EventQueue<T, W>,
-        world: &mut W,
+        game: &mut G,
     ) -> bool;
 }
 
-pub trait Clock<T> where T: Ord {
+pub trait Clock<T = f64> where T: Ord {
     /// convert a real time to an in-game time
     fn in_game(
         self: &mut Self,
