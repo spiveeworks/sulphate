@@ -101,7 +101,7 @@ pub trait Interruption<G> {
     ) -> bool;
 }
 
-pub trait Clock<T = f64> where T: Ord {
+pub trait Clock<T> where T: Ord {
     /// convert a real time to an in-game time
     fn in_game(
         self: &mut Self,

@@ -9,7 +9,7 @@ pub struct Simple<T> {
     last_time: T,
 }
 
-type Diff<T: ops::Sub> = T::Output;
+type Diff<T> = <T as ops::Sub>::Output;
 
 impl<T> Simple<T>
     where T: Clone + ops::Sub + ops::Add<Diff<T>, Output=T>,
