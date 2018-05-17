@@ -3,6 +3,7 @@ use std::thread;
 use std::time;
 
 use event_queue;
+use Time;
 
 pub struct Server<C, I, G> {
     clock: C,
@@ -101,7 +102,7 @@ pub trait Interruption<G> {
     ) -> bool;
 }
 
-pub trait Clock<T> where T: Ord {
+pub trait Clock<T=Time> where T: Ord {
     /// convert a real time to an in-game time
     fn in_game(
         self: &mut Self,

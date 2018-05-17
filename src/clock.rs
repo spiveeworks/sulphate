@@ -2,9 +2,10 @@ use std::ops;
 use std::time;
 
 use server;
+use Time;
 
 #[derive(Clone)]
-pub struct Simple<T> {
+pub struct Simple<T=Time> {
     start_instant: Option<time::Instant>,
     last_time: T,
 }

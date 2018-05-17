@@ -1,6 +1,8 @@
 use std::collections;
 use std::ops;
 
+use Time;
+
 /// The general event trait.
 ///
 /// This trait is for enums that contain multiple kinds of
@@ -64,7 +66,7 @@ impl<G> GeneralEvent<G> for EventBox<G> {
     }
 }
 
-pub struct EventQueue<E, T>
+pub struct EventQueue<E, T=Time>
     where T: Ord + Clone
 {
     now: T,
@@ -185,7 +187,7 @@ impl<G, T> PolyEventQueue<G, T>
     }
 }
 
-pub trait Simulation<E, T>
+pub trait Simulation<E, T=Time>
     where Self: Sized + AsMut<EventQueue<E, T>>,
           T: Ord + Clone,
           E: GeneralEvent<Self>,
